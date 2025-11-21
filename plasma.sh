@@ -29,7 +29,6 @@ CORE_PKGS=(
     "plasma-desktop"   # Shell e KWin
     "sddm"             # Display Manager
     "wayland"          # Protocollo base
-    "plasma-wayland-session" # Sessione Wayland (spesso inclusa in desktop ora, ma esplicito è meglio)
     "egl-wayland"      # Essenziale per NVIDIA (male non fa sugli altri)
     "xdg-desktop-portal-kde" # Fondamentale per Screen Sharing / Flatpak in Wayland
 )
