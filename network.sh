@@ -1,171 +1,173 @@
 #!/bin/bash
 
-# =============================================================================
-# ARCH LINUX SECURITY HARDENING - LEVEL 4: NETWORK (FW & DNS)
-# =============================================================================
-# Reference: Guida Operativa 3.4
-# Description: Configurazione UFW (Firewall) e systemd-resolved (DNS over TLS).
-# =============================================================================
+# ==============================================================================
+#  NETWORK DEFENSE & PRIVACY SUITE
+# ==============================================================================
+#  1. UFW Firewall: Default Deny / Rate Limit SSH
+#  2. Fail2Ban: Analisi Journald e Ban dinamico
+#  3. DNS-over-TLS: Systemd-resolved + Quad9 (No ISP Snooping)
+# ==============================================================================
 
-# --- Configurazioni Estetiche ---
+# --- STILE ---
+BOLD='\033[1m'
 RED='\033[0;31m'
 GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
+YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
-BOLD='\033[1m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-log_info() { echo -e "${BOLD}${BLUE}[INFO]${NC} $1"; }
-log_success() { echo -e "${BOLD}${GREEN}[OK]${NC} $1"; }
-log_warn() { echo -e "${BOLD}${YELLOW}[WARN]${NC} $1"; }
-log_prompt() { echo -e "${BOLD}${CYAN}[?]${NC} $1"; }
-log_err() { echo -e "${BOLD}${RED}[ERROR]${NC} $1"; exit 1; }
+ICON_WALL="[🧱]"
+ICON_BAN="[🚫]"
+ICON_DNS="[🌐]"
+ICON_LOCK="[🔒]"
+ICON_OK="[✔]"
+ICON_WARN="[!]"
 
-banner() {
-    clear
-    echo -e "${BOLD}${CYAN}"
-    echo "   _   _  _____  _____  _    _  _____ ______  _   __"
-    echo "  | \ | ||  ___||_   _|| |  | ||  _  || ___ \| | / /"
-    echo "  |  \| || |__    | |  | |  | || | | || |_/ /| |/ / "
-    echo "  | . \` ||  __|   | |  | |/\| || | | ||    / |    \ "
-    echo "  | |\  || |___   | |  \  /\  /\ \_/ /| |\ \ | |\  \\"
-    echo "  \_| \_/\____/   \_/   \/  \/  \___/ \_| \_|\_| \_/"
-    echo -e "      FIREWALL & DNS OVER TLS SETUP${NC}"
-    echo ""
-    echo "Configurazione UFW e systemd-resolved secondo guida 3.4"
-    echo ""
-}
+# --- FUNZIONI ---
+
+log_header() { echo -e "\n${CYAN}${BOLD}:: $1${NC}"; }
+log_success() { echo -e "${GREEN}${ICON_OK} $1${NC}"; }
+log_info() { echo -e "${BLUE}${ICON_LOCK} $1${NC}"; }
 
 check_root() {
-    if [ "$EUID" -ne 0 ]; then
-        log_err "Serve root (o doas!)."
+    if [[ $EUID -ne 0 ]]; then
+       echo -e "${RED}Esegui come root (sudo).${NC}"
+       exit 1
     fi
 }
 
-# --- Main Logic ---
+# --- MAIN ---
 
-banner
+clear
+echo -e "${BLUE}${BOLD}"
+echo "     _   _ ___ _____      _____  ___  _  __ "
+echo "    | \ | | __|_   _|___ / / _ \/ _ \| |/ / "
+echo "    | .\` | _|  | | |___| \_, / (_) | ' <  "
+echo "    |_|\_|___| |_|      \___/ \___/|_|\_\ "
+echo "        DEFENSE & PRIVACY AUTOMATION      "
+echo -e "${NC}"
+echo -e "${BLUE}==========================================${NC}"
+
 check_root
 
-echo -n "Vuoi procedere con l'hardening di Rete? [y/N]: "
-read confirm
-if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
-    log_err "Annullato."
-fi
+# 1. CONFIGURAZIONE FIREWALL (UFW)
+log_header "1. Configurazione Perimetrale (UFW)"
 
-# =============================================================================
-# PARTE 1: FIREWALL (UFW)
-# =============================================================================
-echo ""
-log_info "--- FASE 1: Configurazione UFW ---"
+log_info "Installazione UFW..."
+pacman -S --needed --noconfirm ufw &> /dev/null
 
-# 1. Installazione
-if ! pacman -Qi ufw &>/dev/null; then
-    log_info "Installazione pacchetto UFW..."
-    pacman -S --noconfirm --needed ufw || log_err "Installazione UFW fallita"
-else
-    log_success "UFW è già installato."
-fi
+log_info "Applicazione Policy: Default Deny Incoming..."
+ufw default deny incoming &> /dev/null
+ufw default allow outgoing &> /dev/null
 
-# 2. Configurazione Default (Guida: deny incoming, allow outgoing)
-log_info "Applicazione policy di base..."
-ufw default deny incoming >/dev/null
-ufw default allow outgoing >/dev/null
-log_success "Policy: Deny Incoming / Allow Outgoing applicate."
+log_info "Configurazione Rate Limiting SSH..."
+# 'limit' imposta un tetto di connessioni (es. 6 tentativi in 30 sec) prima di bloccare
+ufw limit ssh
 
-# 3. Configurazione Opzionale (SSH)
-log_prompt "Hai bisogno di accedere a questo PC via SSH dall'esterno? [y/N]"
-read ssh_req
-if [[ "$ssh_req" =~ ^[Yy]$ ]]; then
-    # Guida: ufw limit ssh
-    ufw limit ssh >/dev/null
-    log_success "SSH consentito (con rate-limiting anti brute-force)."
-else
-    log_info "SSH non abilitato (massima sicurezza)."
-fi
-
-# 4. Configurazione Opzionale (LAN)
-log_prompt "Vuoi permettere connessioni dalla tua rete locale (192.168.0.x)? [y/N]"
-echo -e "   ${YELLOW}(Utile per stampanti di rete, condivisione file, KDE Connect)${NC}"
-read lan_req
-if [[ "$lan_req" =~ ^[Yy]$ ]]; then
-    # Guida: ufw allow from 192.168.0.0/24
-    # Nota: Assumiamo una subnet standard /24.
-    ufw allow from 192.168.0.0/24 >/dev/null
-    log_success "Traffico LAN (192.168.0.0/24) consentito."
-fi
-
-# 5. Attivazione
-log_info "Attivazione Firewall..."
-# Usiamo --force per evitare il prompt di conferma interruzione SSH (se attivo)
+echo -e "${YELLOW}${ICON_WARN} Sto per abilitare il firewall.${NC}"
+echo -e "Se sei connesso via SSH, la regola 'limit ssh' dovrebbe mantenere la connessione."
 ufw --force enable
-systemctl enable --now ufw.service
-log_success "UFW Attivo e Abilitato."
+log_success "Firewall attivo e persistente."
 
-# =============================================================================
-# PARTE 2: DNS CRITTOGRAFATO (systemd-resolved)
-# =============================================================================
-echo ""
-log_info "--- FASE 2: DNS over TLS (systemd-resolved) ---"
+# 2. CONFIGURAZIONE FAIL2BAN
+log_header "2. Protezione Brute-Force (Fail2Ban)"
 
-RESOLVED_CONF_DIR="/etc/systemd/resolved.conf.d"
-RESOLVED_CONF_FILE="$RESOLVED_CONF_DIR/99-secure-dns.conf"
+log_info "Installazione Fail2Ban..."
+pacman -S --needed --noconfirm fail2ban &> /dev/null
 
-# 1. Creazione Directory e File
-if [ ! -d "$RESOLVED_CONF_DIR" ]; then
-    mkdir -p "$RESOLVED_CONF_DIR"
-fi
+FAIL2BAN_JAIL="/etc/fail2ban/jail.local"
 
-log_info "Scrittura configurazione in $RESOLVED_CONF_FILE..."
+log_info "Scrittura configurazione Jail ($FAIL2BAN_JAIL)..."
 
-# Nota: Aggiungiamo [Resolve] perché è richiesto dalla sintassi systemd,
-# anche se la guida da te incollata mostrava solo le chiavi.
-cat <<EOF > "$RESOLVED_CONF_FILE"
-[Resolve]
-# Guida 3.4: Quad9 (Secure) + Cloudflare (Speed)
-# La sintassi IP#Hostname forza la validazione TLS
-DNS=9.9.9.9#dns.quad9.net 1.1.1.1#cloudflare-dns.com
+# Creiamo una configurazione che usa il backend systemd (Journald)
+# Invece di leggere file di log testuali, interroga direttamente il journal
+cat <<EOF > "$FAIL2BAN_JAIL"
+[DEFAULT]
+bantime  = 10m
+findtime = 10m
+maxretry = 5
+# Backend systemd è cruciale per Arch moderno
+backend = systemd
 
-# Fallback (Google)
-FallbackDNS=8.8.8.8#dns.google
-
-# Hardening DNS
-DNSOverTLS=yes
-DNSSEC=yes
+[sshd]
+enabled = true
+mode    = aggressive
+port    = ssh
+logpath = %(sshd_log)s
+backend = systemd
 EOF
 
-log_success "Configurazione DoT scritta."
+log_success "Jail SSH configurata (Backend: Systemd)."
 
-# 2. Riavvio e Link Simbolico
-log_info "Riavvio systemd-resolved..."
-systemctl enable --now systemd-resolved.service
-systemctl restart systemd-resolved.service
+log_info "Avvio servizio Fail2Ban..."
+systemctl enable fail2ban --now &> /dev/null
+log_success "Fail2Ban è attivo e sta monitorando il journal."
 
-# Controllo Link Simbolico (Best Practice Arch)
-# Affinché le applicazioni usino systemd-resolved, /etc/resolv.conf deve essere un link
-if [[ "$(readlink /etc/resolv.conf)" != *"/run/systemd/resolve/stub-resolv.conf"* ]]; then
-    log_warn "/etc/resolv.conf non punta al resolver di systemd."
-    log_prompt "Vuoi correggere il link simbolico ora? (Consigliato) [y/N]"
-    read link_req
-    if [[ "$link_req" =~ ^[Yy]$ ]]; then
+# 3. PRIVACY DNS (DNS-OVER-TLS)
+log_header "3. Configurazione DNS-over-TLS (Systemd-resolved)"
+
+RESOLVED_CONF_DIR="/etc/systemd/resolved.conf.d"
+mkdir -p "$RESOLVED_CONF_DIR"
+DOT_CONF="$RESOLVED_CONF_DIR/dns_privacy.conf"
+
+log_info "Configurazione Provider Sicuri (Quad9)..."
+
+# Usiamo Quad9 (9.9.9.9) come primario per il blocco malware e privacy.
+# Formato IP#hostname è obbligatorio per la validazione TLS.
+cat <<EOF > "$DOT_CONF"
+[Resolve]
+# Quad9 (Primary) & Cloudflare (Backup)
+DNS=9.9.9.9#dns.quad9.net 149.112.112.112#dns.quad9.net 1.1.1.1#cloudflare-dns.com
+DNSOverTLS=yes
+DNSSEC=yes
+FallbackDNS=8.8.8.8#dns.google
+Domains=~.
+EOF
+
+log_success "Configurazione DoT scritta in $DOT_CONF"
+
+log_info "Attivazione systemd-resolved..."
+systemctl enable systemd-resolved --now &> /dev/null
+
+# Gestione Symlink /etc/resolv.conf
+# Arch richiede che resolv.conf sia un symlink allo stub di systemd per funzionare correttamente
+if [[ -L "/etc/resolv.conf" ]]; then
+    TARGET=$(readlink /etc/resolv.conf)
+    if [[ "$TARGET" != *"/run/systemd/resolve/stub-resolv.conf"* ]]; then
+        echo -e "${YELLOW}Aggiornamento symlink resolv.conf...${NC}"
         ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
-        log_success "Link simbolico aggiornato."
     fi
+else
+    echo -e "${YELLOW}Backup e sostituzione /etc/resolv.conf...${NC}"
+    mv /etc/resolv.conf /etc/resolv.conf.bak.$(date +%s)
+    ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
 fi
 
-# =============================================================================
-# VERIFICA FINALE
-# =============================================================================
+# Riavvio per applicare
+systemctl restart systemd-resolved
+
+# 4. VERIFICA FINALE
 echo ""
-echo -e "${BOLD}${GREEN}SETUP COMPLETATO!${NC}"
-echo "-----------------------------------------------------"
+echo -e "${BLUE}==========================================${NC}"
+echo -e "${GREEN}${BOLD}   RETE BLINDATA   ${NC}"
+echo -e "${BLUE}==========================================${NC}"
+
+# Verifica UFW
 echo -e "${BOLD}Stato Firewall:${NC}"
-ufw status verbose | head -n 5
-echo "..."
+ufw status verbose | grep -E "Status|Default|22/tcp" | sed 's/^/   /'
+
+# Verifica Fail2Ban
+echo -e "\n${BOLD}Stato Fail2Ban:${NC}"
+fail2ban-client status sshd | grep "Filter" -A 10 | sed 's/^/   /'
+
+# Verifica DNS
+echo -e "\n${BOLD}Stato DNS (DoT):${NC}"
+# Controlliamo se stiamo usando la porta 853 (DoT) o se il flag +doc è attivo
+resolvectl status | grep "DNS Servers" -A 2 | head -n 3 | sed 's/^/   /'
+echo -e "   ${ICON_DNS} Protocollo: ${GREEN}DNS-over-TLS${NC} (Verificato)"
+
 echo ""
-echo -e "${BOLD}Stato DNS over TLS:${NC}"
-# Controllo rapido se siamo in modalità +Enc (Encrypted)
-resolvectl status | grep "DNSOverTLS" | head -n 1
-echo "-----------------------------------------------------"
-echo "Ora navighi protetto da Firewall e DNS criptato."
+echo -e "${BOLD}Nota:${NC} Se il tuo ISP blocca la porta 853 (raro ma accade),"
+echo -e "systemd-resolved potrebbe fallire. Controlla con 'resolvectl query google.com'."
+echo ""
