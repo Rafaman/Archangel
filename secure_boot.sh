@@ -43,11 +43,11 @@ check_root() {
 }
 
 check_deps() {
-    local deps=("sbsign" "openssl" "mokutil" "grub" "mkinitcpio")
+    local deps=("sbsign" "openssl" "mokutil" "mkinitcpio")
     for cmd in "${deps[@]}"; do
         if ! command -v $cmd &> /dev/null; then
             echo -e "${RED}Manca il comando: $cmd${NC}"
-            echo -e "Installa: sbsigntools, openssl, mokutil, grub"
+            echo -e "Installa: sbsigntools, openssl, mokutil"
             exit 1
         fi
     done
