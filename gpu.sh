@@ -170,34 +170,6 @@ else
     log_success "Installazione completata."
 fi
 
-# ---------------------------------------------------------
-# 4. CONFIGURAZIONE POST-INSTALL (NVIDIA ONLY)
-# ---------------------------------------------------------
-if echo "$GPU_INFO" | grep -qi "NVIDIA"; then
-    log_header "4. Configurazione NVIDIA (DKMS & Hooks)"
-    
-    # Hook Pacman per rigenerare initramfs quando si aggiorna nvidia
-    # (Spesso gestito automaticamente, ma verifichiamo mkinitcpio)
-    
-    echo -e "${ICON_DKMS} I moduli DKMS vengono compilati automaticamente."
-    echo -e "${YELLOW}${ICON_WARN} IMPORTANTE PER PLASMA 6 / WAYLAND:${NC}"
-    echo -e "Devi aggiungere il parametro kernel DRM."
-    
-    GRUB_FILE="/etc/default/grub"
-    if grep -q "nvidia_drm.modeset=1" "$GRUB_FILE"; then
-        log_success "DRM Modeset già attivo in GRUB."
-    else
-        echo -e "   Aggiunta nvidia_drm.modeset=1 a GRUB..."
-        sed -i 's/GRUB_CMDLINE_LINUX_DEFAULT="/&nvidia_drm.modeset=1 /' "$GRUB_FILE"
-        echo -e "   Rigenerazione GRUB..."
-        grub-mkconfig -o /boot/grub/grub.cfg &> /dev/null
-        log_success "GRUB aggiornato."
-    fi
-    
-    echo -e "${INFO} Si consiglia di aggiungere 'nvidia nvidia_modeset nvidia_uvm nvidia_drm'"
-    echo -e "       al file /etc/mkinitcpio.conf nella sezione MODULES=() per il boot anticipato."
-fi
-
 echo ""
 echo -e "${BLUE}=======================================${NC}"
 echo -e "${GREEN}${BOLD}   SETUP GRAFICO COMPLETATO   ${NC}"
