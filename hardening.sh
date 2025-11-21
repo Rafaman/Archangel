@@ -1,155 +1,153 @@
 #!/bin/bash
 
-# =============================================================================
-# ARCH LINUX KERNEL HARDENING (SYSCTL) - LIMINE SYSTEM
-# =============================================================================
-# Reference: Opzione B - Hardening Manuale (Kernel Standard)
-# Description: Applica restrizioni di sicurezza granulari tramite sysctl.conf
-#              senza necessitare del kernel linux-hardened.
-# =============================================================================
+# ==============================================================================
+#  LINUX ZEN HARDENING: SYSCTL OPTIMIZER
+# ==============================================================================
+#  Applica restrizioni di sicurezza mirate (Kernel Hardening) senza
+#  sacrificare le prestazioni multimediali del kernel Zen.
+#  Target: /etc/sysctl.d/99-zen-hardening.conf
+# ==============================================================================
 
-# --- Configurazioni Estetiche ---
+# --- STILE E COLORI ---
+BOLD='\033[1m'
 RED='\033[0;31m'
 GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
 CYAN='\033[0;36m'
-BOLD='\033[1m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-log_info() { echo -e "${BOLD}${CYAN}[INFO]${NC} $1"; }
-log_success() { echo -e "${BOLD}${GREEN}[OK]${NC} $1"; }
-log_warn() { echo -e "${BOLD}${YELLOW}[WARN]${NC} $1"; }
-log_err() { echo -e "${BOLD}${RED}[ERROR]${NC} $1"; exit 1; }
+ICON_SHIELD="[🛡️]"
+ICON_KERNEL="[🧠]"
+ICON_LOCK="[🔒]"
+ICON_CHECK="[✔]"
+ICON_WARN="[!]"
 
-banner() {
-    clear
-    echo -e "${BOLD}${GREEN}"
-    echo "   _   _   ___   ______ ______  _____  _   _  _____ "
-    echo "  | | | | / _ \  | ___ \| ___ \|  ___|| \ | ||  __ \\"
-    echo "  | |_| |/ /_\ \ | |_/ /| |_/ /| |__  |  \| || |  \/"
-    echo "  |  _  ||  _  | |    / |    / |  __| | . \` || | __ "
-    echo "  | | | || | | | | |\ \ | |\ \ | |___ | |\  || |_\ \\"
-    echo "  \_| |_/\_| |_/ \_| \_|\_| \_|\____/ \_| \_/ \____/"
-    echo -e "         SYSCTL SECURITY FOR LIMINE SYSTEMS${NC}"
-    echo ""
-    echo "Questo script applica le policy di sicurezza al Kernel Standard."
-    echo "Compatibile con bootloader Limine (modifiche lato userspace)."
-    echo ""
-}
+CONF_FILE="/etc/sysctl.d/99-zen-hardening.conf"
+
+# --- FUNZIONI ---
+
+log_header() { echo -e "\n${PURPLE}${BOLD}:: $1${NC}"; }
+log_success() { echo -e "${GREEN}${ICON_CHECK} $1${NC}"; }
+log_info() { echo -e "${BLUE}${ICON_KERNEL} $1${NC}"; }
 
 check_root() {
-    if [ "$EUID" -ne 0 ]; then
-        log_err "Per modificare i parametri del kernel serve root."
+    if [[ $EUID -ne 0 ]]; then
+       echo -e "${RED}Esegui come root (sudo).${NC}"
+       exit 1
     fi
 }
 
-# --- Main Logic ---
+# --- MAIN ---
 
-banner
+clear
+echo -e "${CYAN}${BOLD}"
+echo "   _  __ ___  ___  _  _  ___  _     "
+echo "  | |/ /| __|| _ \| \| || __|| |    "
+echo "  | ' < | _| |   /| .\` || _| | |__  "
+echo "  |_|\_\|___||_|_\|_|\_||___||____| "
+echo "     ZEN HARDENING & SYSCTL AUDIT   "
+echo -e "${NC}"
+echo -e "${BLUE}====================================${NC}"
+
 check_root
 
-TARGET_FILE="/etc/sysctl.d/99-hardening.conf"
+# 1. ANALISI KERNEL CORRENTE
+log_header "1. Analisi Ambiente"
+CURRENT_KERNEL=$(uname -r)
+echo -e "   Kernel in uso: ${BOLD}$CURRENT_KERNEL${NC}"
 
-log_info "Preparazione hardening manuale (Opzione B)..."
-
-# 1. Gestione Compatibilità (User Namespaces)
-echo ""
-echo -e "${YELLOW}--- CONFIGURAZIONE COMPATIBILITÀ ---${NC}"
-echo "L'opzione 'kernel.unprivileged_userns_clone' aumenta drasticamente la sicurezza"
-echo "ma impedisce il funzionamento di molte applicazioni desktop moderne."
-echo ""
-echo "Usiamo applicazioni come Docker, Podman, Steam, Discord, VSCode o Chrome?"
-echo -n "Rispondi 's' (Sì) per mantenere compatibilità, 'n' (No) per massima sicurezza: "
-read response
-
-if [[ "$response" =~ ^[Ss]$ ]]; then
-    log_warn "Modalità COMPATIBILE selezionata."
-    log_info "User Namespaces rimarranno abilitati (Docker/Steam funzioneranno)."
-    USERNS_OP="# kernel.unprivileged_userns_clone = 1 (Commentato per compatibilità Docker/Steam)"
+if [[ "$CURRENT_KERNEL" == *"zen"* ]]; then
+    log_success "Kernel Zen rilevato. Ottimizzazione ideale."
 else
-    log_warn "Modalità HARDENED selezionata."
-    log_info "User Namespaces verranno disabilitati. Le app Sandboxate potrebbero non avviarsi."
-    # Nota: Su kernel standard recenti potrebbe chiamarsi 'user.max_user_namespaces=0'
-    # ma manteniamo la sintassi della tua guida per fedeltà, aggiungendo un fallback.
-    USERNS_OP="kernel.unprivileged_userns_clone = 1"
+    echo -e "${YELLOW}${ICON_WARN} Non stai usando il kernel Zen. Le regole verranno applicate comunque.${NC}"
 fi
 
-# 2. Backup esistente
-if [ -f "$TARGET_FILE" ]; then
-    log_info "Backup della configurazione esistente..."
-    cp "$TARGET_FILE" "$TARGET_FILE.bak-$(date +%s)"
-    log_success "Backup creato."
+# 2. SCRITTURA CONFIGURAZIONE
+log_header "2. Applicazione Regole Sysctl (Hardening Chirurgico)"
+
+if [[ -f "$CONF_FILE" ]]; then
+    cp "$CONF_FILE" "$CONF_FILE.bak.$(date +%s)"
+    log_info "Backup configurazione esistente creato."
 fi
 
-# 3. Scrittura file configurazione
-log_info "Scrittura delle direttive in $TARGET_FILE..."
+echo -e "   Scrittura in ${BOLD}$CONF_FILE${NC}..."
 
-cat <<EOF > "$TARGET_FILE"
+cat <<EOF > "$CONF_FILE"
 # =================================================================
-# HARDENING MANUALE (Kernel Standard)
-# Generato automaticamente
+# HARDENING CHIRURGICO PER LINUX-ZEN
+# Generato automaticamente da script di automazione
 # =================================================================
 
-# 1. Nasconde i puntatori del kernel (previene information leaks utili per exploit)
+# 1. Protezione Memoria Kernel (ASLR/ROP Mitigation)
+# Nasconde indirizzi memoria kernel (/proc/kallsyms) a utenti non privilegiati.
 kernel.kptr_restrict = 2
 
-# 2. Restringe l'accesso a dmesg (log del kernel) solo a root
-# Evita che utenti normali vedano indirizzi di memoria o errori hardware sensibili.
+# 2. Protezione Log Kernel (Info Leakage)
+# Restringe l'accesso a dmesg (buffer messaggi) solo a root.
+# Previene la ricognizione hardware/memoria da parte di attaccanti.
 kernel.dmesg_restrict = 1
 
-# 3. Restringe l'uso del BPF JIT
-# Il Berkeley Packet Filter è potente ma è un vettore comune di attacco.
-# Disabilitiamo l'uso non privilegiato e rafforziamo il compilatore JIT.
+# 3. Hardening eBPF (Privilege Escalation)
+# Disabilita l'uso di eBPF per utenti normali.
+# eBPF è potente ma vettore frequente di attacchi JIT spraying.
 kernel.unprivileged_bpf_disabled = 1
-net.core.bpf_jit_harden = 2
 
-# 4. Limita ptrace
-# Impedisce a un processo di ispezionare/modificare la memoria di un altro
-# (a meno che non sia padre-figlio). Blocca molti malware e code-injection.
+# 4. Restrizione Ptrace (Code Injection)
+# Impedisce a un processo di debuggarne/tracciarne un altro a meno che
+# non sia un discendente diretto. Blocca memory scraping di password.
 kernel.yama.ptrace_scope = 2
 
-# 5. Disabilita kexec
-# Impedisce di caricare un nuovo kernel a sistema avviato.
-# Utile per evitare che un attaccante sostituisca il kernel in memoria.
-kernel.kexec_load_disabled = 1
+# 5. Hardening JIT Compiler (Obfuscation)
+# Offusca gli offset delle istruzioni BPF compilate JIT per
+# rendere difficile lo sfruttamento di bug nel compilatore stesso.
+net.core.bpf_jit_harden = 2
 
-# 6. User Namespaces (Selettore Compatibilità)
-# Se attivo (=1), rompe sandbox di browser e container rootless.
-$USERNS_OP
+# =================================================================
 EOF
 
 log_success "File di configurazione creato."
 
-# 4. Applicazione modifiche
-log_info "Applicazione modifiche a caldo (sysctl --system)..."
+# 3. CARICAMENTO REGOLE
+log_header "3. Caricamento a Runtime"
+echo -e "   Applicazione modifiche al kernel attivo..."
 
-# Catturiamo l'output per evitare di spaventare l'utente se una chiave non esiste
-# (alcuni kernel standard non hanno unprivileged_userns_clone esposto così)
-SYSCTL_OUT=$(sysctl --system 2>&1)
-
-if [ $? -eq 0 ]; then
-    log_success "Modifiche applicate correttamente."
+# sysctl --system ricarica tutti i file, -p carica solo quello specificato
+if sysctl -p "$CONF_FILE" &> /dev/null; then
+    log_success "Parametri caricati nel kernel con successo."
 else
-    # Filtriamo errori comuni non bloccanti
-    echo "$SYSCTL_OUT" | grep -v "unknown key"
-    log_warn "Alcune chiavi potrebbero non essere disponibili nel tuo kernel attuale."
-    log_warn "Questo è normale se non stai usando patch specifiche. Le altre sono attive."
+    echo -e "${RED}${ICON_WARN} Errore nel caricamento dei parametri. Verifica la sintassi.${NC}"
+    exit 1
 fi
 
-# 5. Verifica dello stato
-echo ""
-echo -e "${BOLD}--- VERIFICA STATO ---${NC}"
-echo -n "Ptrace Scope (Target: 2): "
-sysctl -n kernel.yama.ptrace_scope
-echo -n "Kexec Disabled (Target: 1): "
-sysctl -n kernel.kexec_load_disabled
-echo -n "BPF Unprivileged (Target: 1): "
-sysctl -n kernel.unprivileged_bpf_disabled
+# 4. AUDIT DI VERIFICA
+log_header "4. Audit di Sicurezza (Verifica Valori Attivi)"
+
+# Funzione interna per verificare un valore
+verify_param() {
+    key=$1
+    expected=$2
+    # Legge il valore attuale dal kernel
+    current=$(sysctl -n "$key" 2>/dev/null)
+    
+    if [[ "$current" == "$expected" ]]; then
+        echo -e "${GREEN}${ICON_SHIELD} OK: $key = $current${NC}"
+    else
+        echo -e "${RED}${ICON_WARN} FAIL: $key = $current (Atteso: $expected)${NC}"
+    fi
+}
+
+verify_param "kernel.kptr_restrict" "2"
+verify_param "kernel.dmesg_restrict" "1"
+verify_param "kernel.unprivileged_bpf_disabled" "1"
+verify_param "kernel.yama.ptrace_scope" "2"
+verify_param "net.core.bpf_jit_harden" "2"
 
 echo ""
-echo -e "${BOLD}${GREEN}HARDENING COMPLETATO!${NC}"
-echo "-----------------------------------------------------"
-echo "Le modifiche sono persistenti al riavvio."
-echo "Poiché usi Limine, non c'è bisogno di rigenerare menu di boot."
-echo "Il kernel caricherà queste regole all'avvio del sistema operativo."
-echo "-----------------------------------------------------"
+echo -e "${BLUE}====================================${NC}"
+echo -e "${GREEN}${BOLD}   KERNEL HARDENING COMPLETATO   ${NC}"
+echo -e "${BLUE}====================================${NC}"
+echo -e "Nota: D'ora in poi, per vedere i log del kernel (dmesg)"
+echo -e "dovrai usare sudo: ${BOLD}sudo dmesg${NC}"
+echo ""
