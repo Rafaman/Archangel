@@ -1,105 +1,165 @@
 #!/bin/bash
 
-# =============================================================================
-# ARCH LINUX SECURITY HARDENING - LEVEL 2: APPARMOR (LIMINE EDITION)
-# =============================================================================
-# Reference: Guida Operativa 3.2 (Adattata per Limine)
-# Description: Installa AppArmor e configura i parametri LSM nel kernel.
-# =============================================================================
+# ==============================================================================
+#  APPARMOR MAC ENABLER
+# ==============================================================================
+#  1. Installazione AppArmor e Audit framework
+#  2. Iniezione parametri LSM (Landlock, Lockdown, Yama, Integrity, AppArmor, BPF)
+#  3. Aggiornamento configurazioni ibride (GRUB + UKI cmdline)
+#  4. Attivazione servizi e caricamento profili
+# ==============================================================================
 
-# --- Configurazioni Estetiche ---
+# --- STILE ---
+BOLD='\033[1m'
 RED='\033[0;31m'
 GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
+YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
 PURPLE='\033[0;35m'
-BOLD='\033[1m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-log_info() { echo -e "${BOLD}${BLUE}[INFO]${NC} $1"; }
-log_success() { echo -e "${BOLD}${GREEN}[OK]${NC} $1"; }
-log_warn() { echo -e "${BOLD}${YELLOW}[WARN]${NC} $1"; }
-log_err() { echo -e "${BOLD}${RED}[ERROR]${NC} $1"; exit 1; }
+ICON_SHIELD="[🛡️]"
+ICON_DOC="[📄]"
+ICON_GEAR="[⚙]"
+ICON_WARN="[!]"
+ICON_CHECK="[✔]"
 
-banner() {
-    clear
-    echo -e "${BOLD}${PURPLE}"
-    echo "    ___  __________  ___  ___  __  ________  ___ "
-    echo "   / _ |/ _/ _/ _  |/ _ \/ _ \/  |/  / __ \/ _ \\"
-    echo "  / __ / _/ _/ __ / , _/ // / /|_/ / /_/ / , _/"
-    echo " /_/ |_\_/_//_/ |_\_|_/____/_/  /_/\____/_/|_| "
-    echo -e "      MANDATORY ACCESS CONTROL (MAC) SETUP${NC}"
-    echo ""
-    echo "Questo script attiverà AppArmor e configurerà il Kernel."
-    echo "Bootloader target: LIMINE"
-    echo ""
-}
-
-check_root() {
-    if [ "$EUID" -ne 0 ]; then
-        log_err "Questo script richiede i permessi di root."
-    fi
-}
-
-# --- Main Logic ---
-
-banner
-check_root
-
-echo -n "Vuoi procedere con l'abilitazione di AppArmor? [y/N]: "
-read confirm
-if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
-    log_err "Operazione annullata."
-fi
-
-# 1. Installazione Pacchetti
-log_info "Installazione pacchetto AppArmor..."
-pacman -S --noconfirm --needed apparmor || log_err "Installazione fallita."
-log_success "Pacchetto installato."
-
-# 2. Abilitazione Servizio
-log_info "Abilitazione servizio systemd..."
-systemctl enable --now apparmor.service || log_err "Impossibile abilitare il servizio."
-log_success "Servizio apparmor.service abilitato."
-
-# 3. Configurazione Kernel (Limine)
-log_info "Configurazione parametri Kernel in Limine..."
-
-LIMINE_CONF="/boot/limine.conf"
+# Parametri Kernel Richiesti
 LSM_PARAMS="lsm=landlock,lockdown,yama,integrity,apparmor,bpf"
 
-if [ ! -f "$LIMINE_CONF" ]; then
-    log_err "Non trovo $LIMINE_CONF. Assicurati che Limine sia installato correttamente."
+# File Configurazione
+GRUB_CONF="/etc/default/grub"
+CMDLINE_FILE="/etc/kernel/cmdline"
+
+# --- FUNZIONI ---
+
+log_header() { echo -e "\n${PURPLE}${BOLD}:: $1${NC}"; }
+log_success() { echo -e "${GREEN}${ICON_CHECK} $1${NC}"; }
+log_info() { echo -e "${BLUE}${ICON_GEAR} $1${NC}"; }
+
+check_root() {
+    if [[ $EUID -ne 0 ]]; then
+       echo -e "${RED}Esegui come root (sudo).${NC}"
+       exit 1
+    fi
+}
+
+# --- MAIN ---
+
+clear
+echo -e "${BLUE}${BOLD}"
+echo "     _  ___ ___  _   ___ __  __  ___  ___ "
+echo "    /_\/ _ \ _ \/_\ | _ \  \/  |/ _ \| _ \\"
+echo "   / _ \  _/  _/ _ \|   / |\/| | (_) |   /"
+echo "  /_/ \_\_| |_/_/ \_\_|_\_|  |_|\___/|_|_\ "
+echo "       MANDATORY ACCESS CONTROL SETUP      "
+echo -e "${NC}"
+echo -e "${BLUE}==========================================${NC}"
+
+check_root
+
+# 1. INSTALLAZIONE PACCHETTI
+log_header "1. Installazione Componenti AppArmor"
+
+PACKAGES="apparmor audit python-psutil"
+# Aggiungiamo apparmor-profiles se vuoi i profili extra, ma la guida cita "confina app vulnerabili"
+# quindi è meglio averli come base.
+PACKAGES="$PACKAGES apparmor-profiles"
+
+log_info "Installazione: $PACKAGES..."
+if pacman -S --needed --noconfirm $PACKAGES > /dev/null 2>&1; then
+    log_success "Pacchetti installati."
+else
+    echo -e "${RED}Errore installazione pacchetti.${NC}"
+    exit 1
 fi
 
-# Controllo se i parametri sono già presenti per evitare duplicati
-if grep -q "apparmor" "$LIMINE_CONF"; then
-    log_warn "Sembra che AppArmor sia già presente in $LIMINE_CONF."
-    log_warn "Salto la modifica del bootloader per sicurezza."
-else
-    # Backup
-    cp "$LIMINE_CONF" "$LIMINE_CONF.bak-apparmor"
-    log_info "Backup creato in $LIMINE_CONF.bak-apparmor"
+# 2. CONFIGURAZIONE PARAMETRI KERNEL (GRUB)
+log_header "2. Configurazione Kernel Parameters (GRUB)"
 
-    # Iniezione Parametri
-    # Cerca le righe che iniziano con 'cmdline:' (anche indentate) e appende la stringa alla fine
-    sed -i "/^[[:space:]]*cmdline:/ s/$/ $LSM_PARAMS/" "$LIMINE_CONF"
+if [[ -f "$GRUB_CONF" ]]; then
+    # Backup
+    cp "$GRUB_CONF" "$GRUB_CONF.bak.aa"
     
-    if grep -q "$LSM_PARAMS" "$LIMINE_CONF"; then
-        log_success "Parametri LSM iniettati correttamente in $LIMINE_CONF."
+    # Controllo se già presenti
+    if grep -q "lsm=" "$GRUB_CONF"; then
+        echo -e "${YELLOW}${ICON_WARN} Parametri LSM sembrano già presenti in GRUB.${NC}"
+        echo -e "   Verifica manuale: $(grep "lsm=" $GRUB_CONF)"
     else
-        log_err "Qualcosa è andato storto con la modifica di $LIMINE_CONF."
+        log_info "Iniezione parametri in GRUB_CMDLINE_LINUX_DEFAULT..."
+        # Aggiunge i parametri in coda alla riga esistente
+        sed -i "s/^GRUB_CMDLINE_LINUX_DEFAULT=\"/GRUB_CMDLINE_LINUX_DEFAULT=\"$LSM_PARAMS /" "$GRUB_CONF"
+        log_success "GRUB aggiornato."
+    fi
+else
+    echo -e "${RED}${ICON_WARN} File $GRUB_CONF non trovato!${NC}"
+fi
+
+# 3. CONFIGURAZIONE PARAMETRI KERNEL (UKI / CMDLINE)
+log_header "3. Configurazione Kernel Parameters (UKI/Cmdline)"
+
+if [[ -f "$CMDLINE_FILE" ]]; then
+    # Backup
+    cp "$CMDLINE_FILE" "$CMDLINE_FILE.bak.aa"
+    
+    if grep -q "lsm=" "$CMDLINE_FILE"; then
+        echo -e "${YELLOW}${ICON_WARN} Parametri LSM già presenti in $CMDLINE_FILE.${NC}"
+    else
+        log_info "Append parametri a $CMDLINE_FILE..."
+        # Aggiunge in fondo alla riga
+        sed -i "s/$/ $LSM_PARAMS/" "$CMDLINE_FILE"
+        log_success "Cmdline UKI aggiornata."
+    fi
+else
+    echo -e "${YELLOW}${ICON_WARN} $CMDLINE_FILE non trovato (Forse non usi UKI?). Salto.${NC}"
+fi
+
+# 4. ATTIVAZIONE SERVIZI
+log_header "4. Attivazione Servizi Systemd"
+
+log_info "Abilitazione apparmor.service..."
+systemctl enable apparmor --now &> /dev/null
+log_success "AppArmor Service abilitato."
+
+log_info "Abilitazione auditd.service (Logging)..."
+systemctl enable auditd --now &> /dev/null
+log_success "Auditd Service abilitato."
+
+
+# 5. RIGENERAZIONE BOOTLOADER & UKI
+log_header "5. Applicazione Modifiche (Rigenerazione)"
+
+echo -e "   ${ICON_GEAR} Rigenerazione Configurazione GRUB..."
+grub-mkconfig -o /boot/grub/grub.cfg &> /dev/null
+log_success "GRUB rigenerato."
+
+if [[ -f "/etc/mkinitcpio.d/linux-zen.preset" ]]; then
+    echo -e "   ${ICON_GEAR} Rigenerazione UKI (mkinitcpio)..."
+    mkinitcpio -P &> /dev/null
+    log_success "UKI rigenerate con i nuovi parametri."
+    
+    # Se avevamo lo script di firma automatica (dal passo 3.2), lo lanciamo per sicurezza
+    if [[ -x "/usr/local/bin/sign-assets.sh" ]]; then
+        echo -e "   ${ICON_DOC} Firma UKI aggiornate..."
+        /usr/local/bin/sign-assets.sh > /dev/null
+        log_success "UKI firmate."
     fi
 fi
 
-# 4. Info Finali
+# 6. VERIFICA STATO
 echo ""
-echo -e "${BOLD}${GREEN}SETUP COMPLETATO!${NC}"
-echo "-----------------------------------------------------"
-echo -e "AppArmor è installato e configurato."
-echo -e "Per renderlo effettivo, devi ${BOLD}RIAVVIARE${NC} il sistema."
+echo -e "${BLUE}==========================================${NC}"
+echo -e "${GREEN}${BOLD}   APPARMOR CONFIGURATO   ${NC}"
+echo -e "${BLUE}==========================================${NC}"
+echo -e "Lo stato attuale è:"
+aa-status --enabled 2>/dev/null
+if [[ $? -eq 0 ]]; then
+    echo -e "${GREEN}Attivo (Kernel support detected)${NC}"
+else
+    echo -e "${YELLOW}Inattivo (Richiede Riavvio)${NC}"
+fi
 echo ""
-echo "Dopo il riavvio, verifica lo stato con:"
-echo -e "${BOLD}sudo aa-status${BOLD}${NC}"
-echo "-----------------------------------------------------"
-echo "Riavvia ora: reboot"
+echo -e "Al prossimo riavvio, verifica con: ${BOLD}aa-status${BOLD}"
+echo -e "I profili extra sono installati ma non enforced di default."
+echo -e "Per confinare un'app (es. firefox), installa il profilo extra e riavvia AppArmor."
+echo ""
