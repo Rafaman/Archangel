@@ -1,184 +1,206 @@
 #!/bin/bash
 
-# =============================================================================
-# ARCH LINUX MIGRATION SCRIPT - PURE FLAT LAYOUT (Limine Edition)
-# =============================================================================
-# Description: Migra il sistema da Btrfs standard a Layout Flat (@, @home, etc.)
-#              Aggiorna Fstab e Limine. NON configura Snapper.
-# =============================================================================
+# ==============================================================================
+#  BTRFS FLAT LAYOUT MIGRATION TOOL
+# ==============================================================================
+#  Automatizza la conversione da layout Btrfs Nested a Flat.
+#  Include snapshot di sicurezza, migrazione dati e gestione subvolumi.
+# ==============================================================================
 
-# --- Colori e Stile ---
+# --- CONFIGURAZIONE VISIVA ---
+BOLD='\033[1m'
 RED='\033[0;31m'
 GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BOLD='\033[1m'
-NC='\033[0m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+NC='\033[0m' # No Color
 
-# --- Opzioni Btrfs Ottimizzate (Guida 1.4) ---
-# Nota: Manteniamo le opzioni performanti per SSD
-BTRFS_OPTS="defaults,noatime,compress=zstd:1,discard=async,ssd,space_cache=v2"
+# Icone
+ICON_OK="[✔]"
+ICON_KO="[✘]"
+ICON_INFO="[i]"
+ICON_WARN="[!]"
+ICON_GEAR="[⚙]"
+ICON_DISK="[💾]"
 
-log_info() { echo -e "${BOLD}${NC} $1"; }
-log_success() { echo -e "${GREEN}[OK]${NC} $1"; }
-log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
-log_err() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
+# Variabili Globali
+MOUNT_POINT="/mnt"
+LOG_FILE="btrfs_migration.log"
 
-banner() {
-        clear
-    echo -e "${BOLD}${GREEN}"
-    echo "   ___  ___  ___  ______  ___  _____  _____  _____ "
-    echo "   |  \/  | / _ \ | ___ \ |  \/  ||  _  ||  _  | "
-    echo "   | .  . |/ /_\ \| |_/ / | .  . || | | || | | | "
-    echo "   | |\/| ||  _  ||    /  | |\/| || | | || | | | "
-    echo "   | |  | || | | || |\ \  | |  | |\ \_/ /\ \_/ / "
-    echo "   \_|  |_/\_| |_/\_| \_| \_|  |_/ \___/  \___/  "
-    echo -e "            LIMINE & SNAPPER FIX EDITION${NC}"
-    echo "   MIGRATOR TO FLAT LAYOUT (CORE ONLY)"
-    echo "   Limine Bootloader Support"
+# --- FUNZIONI DI UTILITÀ ---
+
+print_banner() {
+    clear
+    echo -e "${CYAN}${BOLD}"
+    echo "   ___  _____  ___  ___  ___   ___  ___   ___  "
+    echo "  | _ )|_   _|| _ \| __|/ __| / __|| _ \ | _ \ "
+    echo "  | _ \  | |  |   /| _| \__ \| (__ |   / |  _/ "
+    echo "  |___/  |_|  |_|_\|_|  |___/ \___||_|_\ |_|   "
+    echo "                                               "
+    echo "      FLAT LAYOUT MIGRATOR | LIMINE READY      "
     echo -e "${NC}"
-    echo "Questo script sposta il sistema in subvolumi (@, @home, @snapshots, @var_log)"
-    echo "e aggiorna fstab/limine.conf per il riavvio."
+    echo -e "${BLUE}====================================================${NC}"
 }
 
-# --- Check Root ---
-if [ "$EUID" -ne 0 ]; then log_err "Serve root."; fi
+log_step() {
+    echo -e "\n${BLUE}${BOLD}:: $1${NC}"
+    echo "Step: $1" >> "$LOG_FILE"
+}
 
-banner
-echo -n "Procedere con la migrazione del filesystem? [y/N]: "
-read confirm
-if [[ ! "$confirm" =~ ^[Yy]$ ]]; then log_err "Annullato."; fi
+log_success() {
+    echo -e "${GREEN}${ICON_OK} $1${NC}"
+}
 
-# --- 1. Analisi Sistema ---
-ROOT_UUID=$(findmnt -n -o UUID /)
-log_info "UUID Root rilevato: $ROOT_UUID"
+log_error() {
+    echo -e "${RED}${ICON_KO} ERRORE: $1${NC}"
+    exit 1
+}
 
-# --- 2. Gestione Subvolumi ---
-log_info "Creazione struttura subvolumi..."
+log_warn() {
+    echo -e "${YELLOW}${ICON_WARN} ATTENZIONE: $1${NC}"
+}
 
-# Root @
-if [ ! -d "/@" ]; then
-    btrfs subvolume snapshot / /@ || log_err "Impossibile creare snapshot /@"
-    log_success "Snapshot root /@ creato."
-else
-    log_warn "/@ esisteva già."
-fi
-
-# Subvolumi Flat
-# Creiamo @snapshots anche se non configuriamo snapper ora, per avere il layout pronto
-SUBVOLS=("@home" "@snapshots" "@var_log")
-for sv in "${SUBVOLS[@]}"; do
-    if [ ! -d "/$sv" ]; then
-        btrfs subvolume create "/$sv"
-        log_success "Creato subvolume /$sv"
+check_root() {
+    if [[ $EUID -ne 0 ]]; then
+       log_error "Questo script deve essere eseguito come root (sudo)."
     fi
-done
+}
 
-# --- 3. Migrazione Dati ---
-log_info "Sincronizzazione dati..."
+check_dependency() {
+    local cmd=$1
+    echo -ne "   ${ICON_GEAR} Verifica ${cmd}...\r"
+    if ! command -v $cmd &> /dev/null; then
+        echo -e "${RED}${ICON_KO} Comando mancante: ${cmd}${NC}"
+        log_error "Installa ${cmd} prima di procedere."
+    else
+        echo -e "${GREEN}${ICON_OK} Dipendenza soddisfatta: ${cmd}   ${NC}"
+    fi
+}
 
-# Home
-if [ -z "$(ls -A /@home)" ]; then
-    rsync -aAX --info=progress2 /home/ /@home/
-    log_success "/home migrata."
-fi
+confirm_action() {
+    echo -e -n "${YELLOW}   Sei sicuro di voler procedere? (s/N): ${NC}"
+    read -r response
+    if [[ ! "$response" =~ ^([sS][iI]|[sS])$ ]]; then
+        echo -e "${RED}   Operazione annullata dall'utente.${NC}"
+        exit 0
+    fi
+}
 
-# Var Log
-if [ -z "$(ls -A /@var_log)" ]; then
-    rsync -aAX --info=progress2 /var/log/ /@var_log/
-    log_success "/var/log migrata."
-fi
+# --- LOGICA PRINCIPALE ---
 
-# --- 4. Preparazione Mountpoint (FIX FSTAB) ---
-log_info "Preparazione mountpoint dentro la NUOVA root (@)..."
+main() {
+        print_banner
+        check_root
+        
+        # 1. Acquisizione Target
+        echo -e -n "${BOLD}Inserisci la partizione di ROOT (es. /dev/sda2): ${NC}"
+        read -r TARGET_DEV
+        
+        if [[ ! -b "$TARGET_DEV" ]]; then
+            echo -e "${RED}Device non valido.${NC}"
+            exit 1
+        fi
+        
+        # 2. Montaggio della nuova gerarchia
+        log_header "Montaggio struttura subvolumi in $MOUNT_POINT"
+        
+        # Smonta tutto per pulizia
+        umount -R "$MOUNT_POINT" 2>/dev/null
+        
+        # Mount Root (@)
+        echo -e "   ${ICON_DISK} Montaggio @ su /"
+        mount -t btrfs -o subvol=@,compress=zstd,noatime "$TARGET_DEV" "$MOUNT_POINT"
+        
+        # Creazione directory mountpoint se mancanti (dovrebbero esserci dalla fase 1)
+        mkdir -p "$MOUNT_POINT/home"
+        mkdir -p "$MOUNT_POINT/.snapshots"
+        mkdir -p "$MOUNT_POINT/var/log"
+        mkdir -p "$MOUNT_POINT/boot/efi" # Assumendo EFI, crea se manca
+        
+        # Mount Subvolumi "Figli"
+        echo -e "   ${ICON_DISK} Montaggio @home su /home"
+        mount -t btrfs -o subvol=@home,compress=zstd,noatime "$TARGET_DEV" "$MOUNT_POINT/home"
+        
+        echo -e "   ${ICON_DISK} Montaggio @snapshots su /.snapshots"
+        mount -t btrfs -o subvol=@snapshots,compress=zstd,noatime "$TARGET_DEV" "$MOUNT_POINT/.snapshots"
+        
+        echo -e "   ${ICON_DISK} Montaggio @var_log su /var/log"
+        mount -t btrfs -o subvol=@var_log,compress=zstd,noatime "$TARGET_DEV" "$MOUNT_POINT/var/log"
+        
+        # 3. Generazione Fstab
+        log_header "Generazione automatica /etc/fstab"
+        
+        FSTAB_FILE="$MOUNT_POINT/etc/fstab"
+        # Backup del vecchio fstab
+        cp "$FSTAB_FILE" "$FSTAB_FILE.bak.$(date +%s)"
+        
+        echo -e "   ${ICON_GEAR} Scrittura nuovo fstab..."
+        
+        # Ottieni UUID
+        UUID=$(blkid -s UUID -o value "$TARGET_DEV")
+        
+        # Scrittura Fstab (Sovrascrittura controllata delle righe Btrfs)
+        # Mantiene le altre entry (come swap o partizione EFI) se presenti nel backup? 
+        # Per sicurezza, qui rigeneriamo le entry BTRFS essenziali.
+        # NOTA: Se hai una partizione EFI separata (/boot/efi), dovrai assicurarti che sia nell'fstab.
+        
+        cat <<EOF > "$FSTAB_FILE"
+        # /etc/fstab: static file system information.
+        # Generated by Automated Script
+        
+        # <file system>                           <mount point>  <type>  <options>                                 <dump>  <pass>
+        UUID=$UUID                                /              btrfs   subvol=@,defaults,noatime,compress=zstd   0       0
+        UUID=$UUID                                /home          btrfs   subvol=@home,defaults,noatime,compress=zstd 0     0
+        UUID=$UUID                                /.snapshots    btrfs   subvol=@snapshots,defaults,noatime,compress=zstd 0 0
+        UUID=$UUID                                /var/log       btrfs   subvol=@var_log,defaults,noatime,compress=zstd 0  0
+        
+        # Recupera eventuali partizioni NON-btrfs dal vecchio fstab (es. /boot/efi o swap)
+        EOF
+        
+        # Tentativo semplice di recuperare la partizione EFI dal vecchio fstab
+        grep -v "btrfs" "$FSTAB_FILE.bak"* | grep -E "vfat|swap" | cut -d: -f2- >> "$FSTAB_FILE"
+        
+        echo -e "${GREEN}${ICON_OK} Fstab aggiornato.${NC}"
+        
+        # 4. Preparazione Chroot (Bind Mounts)
+        log_header "Preparazione Ambiente Chroot (Bind API FS)"
+        
+        for dir in dev proc sys run; do
+            mount --bind /$dir "$MOUNT_POINT/$dir"
+            mount --make-rslave "$MOUNT_POINT/$dir" 
+        done
+        
+        # Se c'è una partizione EFI, prova a montarla
+        # Cerca nel nuovo fstab dove è montata /boot o /boot/efi
+        EFI_PART=$(grep "/boot" "$FSTAB_FILE" | awk '{print $1}' | head -n 1)
+        EFI_MOUNT=$(grep "/boot" "$FSTAB_FILE" | awk '{print $2}' | head -n 1)
+        
+        if [[ -n "$EFI_PART" && -n "$EFI_MOUNT" ]]; then
+            # Risolvi UUID=... se necessario, ma mount di solito è intelligente
+            echo -e "   ${ICON_DISK} Rilevata partizione boot/efi in fstab, tentativo mount..."
+            mount "$MOUNT_POINT/$EFI_MOUNT"
+        fi
+        
+        
+        # 5. Istruzioni Finali
+        log_header "Pronto per l'aggiornamento di GRUB"
+        echo -e "Il sistema è montato e pronto in ${BOLD}$MOUNT_POINT${NC}"
+        echo -e "Ora entrerai automaticamente in chroot."
+        echo -e "Esegui questo comando una volta dentro:"
+        echo -e "   ${GREEN}grub-mkconfig -o /boot/grub/grub.cfg${NC}"
+        echo -e "(Su Ubuntu/Debian puoi usare semplicemente: ${GREEN}update-grub${NC})"
+        echo ""
+        echo -e "${YELLOW}Premi INVIO per entrare in Chroot (scrivi 'exit' per uscire)...${NC}"
+        read
+        
+        chroot "$MOUNT_POINT" /bin/bash
+        
+        # Cleanup all'uscita
+        echo -e "\n${BLUE}Uscita dal Chroot. Smontaggio volumi...${NC}"
+        umount -R "$MOUNT_POINT"
+        echo -e "${GREEN}${ICON_OK} Procedura terminata. Puoi riavviare.${NC}"
+}
 
-# Puliamo i dati vecchi dentro lo snapshot @ per far posto ai mountpoint
-rm -rf /@/home/*
-rm -rf /@/var/log/*
-
-# FIX ESSENZIALE: Creiamo la directory /.snapshots dentro la nuova root
-# Questo assicura che fstab non fallisca al mount, indipendentemente da Snapper
-if [ ! -d "/@/.snapshots" ]; then
-    mkdir -p /@/.snapshots
-    log_success "Directory mountpoint /@/.snapshots creata."
-fi
-chmod 750 /@/.snapshots
-
-# --- 5. Generazione Fstab ---
-log_info "Generazione nuovo /@/etc/fstab..."
-cp /etc/fstab /@/etc/fstab.bak
-
-# Rilevamento Boot
-BOOT_UUID=$(findmnt -n -o UUID /boot)
-if [ -z "$BOOT_UUID" ] || [ "$BOOT_UUID" == "$ROOT_UUID" ]; then
-    IS_BOOT_SEPARATE=false
-    BOOT_ENTRY="# /boot è una cartella nel subvolume root"
-else
-    IS_BOOT_SEPARATE=true
-    BOOT_ENTRY="UUID=$BOOT_UUID  /boot        vfat     rw,relatime,fmask=0022,dmask=0022,codepage=437,errors=remount-ro 0 2"
-fi
-
-cat <<EOF > /@/etc/fstab
-# /etc/fstab: static file system information.
-# Generated by Migration Script (Flat Layout)
-
-# Root
-UUID=$ROOT_UUID  /            btrfs    subvol=@,$BTRFS_OPTS 0 0
-
-# Subvolumi Dati
-UUID=$ROOT_UUID  /home        btrfs    subvol=@home,$BTRFS_OPTS 0 0
-UUID=$ROOT_UUID  /var/log     btrfs    subvol=@var_log,$BTRFS_OPTS 0 0
-
-# Subvolume Snapshots (Pronto per il futuro)
-UUID=$ROOT_UUID  /.snapshots  btrfs    subvol=@snapshots,$BTRFS_OPTS 0 0
-
-# Bootloader
-$BOOT_ENTRY
-EOF
-
-# Append Swap se esistente
-grep "swap" /etc/fstab >> /@/etc/fstab
-log_success "Fstab aggiornato."
-
-# --- 6. Aggiornamento Limine ---
-log_info "Configurazione Limine..."
-LIMINE_CONF="/boot/limine.conf"
-[ -f "$LIMINE_CONF" ] && cp "$LIMINE_CONF" "$LIMINE_CONF.bak-migrazione"
-
-# Pulizia argomenti vecchi
-CURRENT_CMDLINE=$(cat /proc/cmdline | sed -e 's/root=UUID=[^ ]*//g' -e 's/root=[^ ]*//g' -e 's/rootflags=[^ ]*//g' -e 's/rw//g')
-
-# Gestione Path Kernel
-if [ "$IS_BOOT_SEPARATE" = true ]; then
-    KERNEL_PATH="boot():/vmlinuz-linux"
-    INITRD_PATH="boot():/initramfs-linux.img"
-else
-    KERNEL_PATH="boot():/@/boot/vmlinuz-linux"
-    INITRD_PATH="boot():/@/boot/initramfs-linux.img"
-fi
-
-cat <<EOF > "$LIMINE_CONF"
-timeout: 5
-
-/Arch Linux (Flat Layout)
-    protocol: linux
-    kernel_path: $KERNEL_PATH
-    module_path: $INITRD_PATH
-    cmdline: root=UUID=$ROOT_UUID rw rootflags=subvol=@ $CURRENT_CMDLINE
-
-/Arch Linux (Fallback)
-    protocol: linux
-    kernel_path: $KERNEL_PATH
-    module_path: ${INITRD_PATH%.img}-fallback.img
-    cmdline: root=UUID=$ROOT_UUID rw rootflags=subvol=@ $CURRENT_CMDLINE
-EOF
-log_success "Limine configurato con rootflags=subvol=@."
-
-# --- Fine ---
-echo ""
-echo -e "${BOLD}${GREEN}MIGRAZIONE COMPLETATA.${NC}"
-echo "-----------------------------------------------------"
-echo "Il sistema è stato migrato al layout Flat."
-echo "Al prossimo riavvio userai il subvolume @ come root."
-echo "La cartella /.snapshots è montata e pronta per quando vorrai configurare Snapper."
-echo "-----------------------------------------------------"
-echo "Riavvia ora: reboot"
+# Avvio
+main
