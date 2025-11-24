@@ -138,14 +138,14 @@ log_header "4. Attivazione Bootloader Integration"
 
 # Abilita il path unit che monitora /.snapshots
 log_info "Abilitazione grub-btrfsd (monitoraggio realtime)..."
-systemctl enable --now grub-btrfsd.path
+systemctl enable --now grub-btrfsd
 
 # Forza una rigenerazione immediata per vedere se rileva lo snapshot 0/iniziale
 echo -e "   ${ICON_BOOT} Rigenerazione menu GRUB..."
 # grub-mkconfig rileverà gli snapshot se presenti
 grub-mkconfig -o /boot/grub/grub.cfg &> /dev/null
 
-if systemctl is-active --quiet grub-btrfsd.path; then
+if systemctl is-active --quiet grub-btrfsd; then
     log_success "Demone grub-btrfs attivo."
 else
     echo -e "${RED}${ICON_WARN} Il demone grub-btrfs non sembra attivo.${NC}"
