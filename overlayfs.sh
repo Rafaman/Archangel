@@ -74,7 +74,7 @@ fi
 
 # 5. Rigenerazione GRUB
 echo -e "   Aggiornamento menu GRUB..."
-grub-mkconfig -o /boot/grub/grub.cfg &> /dev/null
+grub-mkconfig -o /efi/grub/grub.cfg &> /dev/null
 
 echo ""
 echo -e "${GREEN}${BOLD}FIX APPLICATO.${NC}"
